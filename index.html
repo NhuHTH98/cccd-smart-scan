@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CCCD SMART SCAN</title>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+:root{--blue:#034EA2;--silver:#c0c0c2;--bg:#f4f6f9;--ink:#172033}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);font:15px Arial,sans-serif;color:var(--ink)}
+main{max-width:900px;margin:auto;padding:18px}
+header{background:var(--blue);color:white;padding:20px;border-radius:14px;margin-bottom:16px}
+h1{font-size:22px;margin:0 0 6px}p{line-height:1.5}.muted{color:#667085;font-size:13px}
+.card{background:white;border:1px solid #e2e6ec;border-radius:14px;padding:16px;margin:14px 0}
+button{border:0;border-radius:9px;padding:12px 16px;background:var(--blue);color:white;font-weight:600;cursor:pointer;margin:4px}
+button.secondary{background:#e8edf5;color:#172033}button.danger{background:#a32626}
+input{width:100%;padding:11px;border:1px solid #cbd2dc;border-radius:8px;font-size:15px}
+label{display:block;font-size:13px;font-weight:600;margin:10px 0 5px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+#reader{max-width:520px;margin:10px auto}.status{padding:10px;border-radius:8px;background:#eef3fa;margin:10px 0}
+table{border-collapse:collapse;width:100%;font-size:13px}th,td{padding:9px;border-bottom:1px solid #e5e7eb;text-align:left}
+.tablewrap{overflow:auto}.pill{display:inline-block;background:#e8f5ec;color:#176b35;padding:4px 8px;border-radius:20px;font-size:12px}
+@media(max-width:600px){.grid{grid-template-columns:1fr}main{padding:10px}header{padding:16px}}
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>CCCD SMART SCAN</h1>
+<div>Quét QR CCCD • Kiểm tra • Xuất Excel</div>
+</header>
+<div class="card">
+<strong>1. Quét mã QR CCCD</strong>
+<p class="muted">Dùng camera sau điện thoại. Trang cần được triển khai trên HTTPS và được cấp quyền camera. Dữ liệu được xử lý trong trình duyệt; không gửi lên máy chủ bởi mã ứng dụng này.</p>
+<div id="reader"></div>
+<button id="startBtn">Bật camera và quét</button>
+<button id="stopBtn" class="secondary">Tắt camera</button>
+<div id="status" class="status">Chưa bật camera.</div>
+<label for="raw">Hoặc dán nội dung QR đã sao chép (nếu có)</label>
+<input id="raw" placeholder="Dán chuỗi QR vào đây rồi chọn Đọc dữ liệu">
+<button id="parseBtn" class="secondary">Đọc dữ liệu</button>
+</div>
+
+<div class="card">
+<strong>2. Kiểm tra và chỉnh sửa thông tin</strong>
+<p class="muted">Vui lòng đối chiếu với CCCD gốc trước khi thêm vào danh sách. MST và BHXH được điền theo quy tắc bạn cung cấp; hãy xác nhận điều này phù hợp hồ sơ từng người.</p>
+<div class="grid">
+<div><label>Số CCCD / định danh</label><input id="cccd"></div>
+<div><label>Số CMND cũ</label><input id="cmnd"></div>
+<div><label>Họ và tên</label><input id="name"></div>
+<div><label>Giới tính</label><input id="gender"></div>
+<div><label>Ngày sinh</label><input id="dob" placeholder="DD/MM/YYYY"></div>
+<div><label>Ngày cấp CCCD</label><input id="issue" placeholder="DD/MM/YYYY"></div>
+<div style="grid-column:1/-1"><label>Nơi thường trú</label><input id="address"></div>
+<div><label>Mã số thuế (theo quy tắc DTLA)</label><input id="mst"></div>
+<div><label>Số BHXH (theo quy tắc DTLA)</label><input id="bhxh"></div>
+</div>
+<button id="addBtn">Xác nhận và thêm hồ sơ</button>
+<button id="clearBtn" class="secondary">Xóa form</button>
+</div>
+
+<div class="card">
+<strong>3. Danh sách hồ sơ đã xác nhận</strong>
+<div id="count" class="status">0 hồ sơ</div>
+<div class="tablewrap">
+<table><thead><tr><th>STT</th><th>Họ tên</th><th>CCCD</th><th>Ngày sinh</th><th>Thao tác</th></tr></thead><tbody id="rows"></tbody></table>
+</div>
+<button id="exportBtn">Xuất Excel (.xlsx)</button>
+<button id="csvBtn" class="secondary">Xuất CSV</button>
+<button id="deleteAllBtn" class="danger">Xóa toàn bộ danh sách</button>
+</div>
+<p class="muted">Bản thử nghiệm: chưa kết nối PMNS, chưa tự tải lên OneDrive và chưa thay thế bước kiểm tra hồ sơ của PNS. Không dùng dữ liệu thật trước khi IT phê duyệt nơi lưu trữ, quyền truy cập và quy trình bảo vệ dữ liệu.</p>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+let scanner=null, records=[];
+const fields=['cccd','cmnd','name','gender','dob','address','issue','mst','bhxh'];
+function clean(s){return (s||'').replace(/\u0000/g,'').trim();}
+function normDate(v){
+  v=clean(v);
+  if(/^\d{8}$/.test(v)) return v.slice(0,2)+'/'+v.slice(2,4)+'/'+v.slice(4);
+  if(/^\d{4}-\d{2}-\d{2}$/.test(v)){let [y,m,d]=v.split('-');return d+'/'+m+'/'+y;}
+  return v;
+}
+function parseQR(raw){
+  raw=clean(raw);
+  // Some scanner outputs contain labeled lines; support both labeled text and pipe-delimited QR payloads.
+  const labeled={};
+  raw.split(/\r?\n/).forEach(line=>{
+    const m=line.match(/^\s*(Số CCCD|Số định danh|Số CMND|Họ và tên|Giới tính|Ngày sinh|Nơi thường trú|Địa chỉ thường trú|Ngày cấp CCCD|Ngày cấp)\s*:\s*(.*)$/i);
+    if(m) labeled[m[1].toLowerCase()]=clean(m[2]);
+  });
+  if(Object.keys(labeled).length){
+    const get=(...keys)=>{for(const k of keys)if(labeled[k])return labeled[k];return ''};
+    return {cccd:get('số cccd','số định danh'),cmnd:get('số cmnd'),name:get('họ và tên'),gender:get('giới tính'),dob:normDate(get('ngày sinh')),address:get('nơi thường trú','địa chỉ thường trú'),issue:normDate(get('ngày cấp cccd','ngày cấp'))};
+  }
+  const a=raw.split('|').map(clean);
+  // Common VN citizen-ID QR order: ID|old ID|name|DOB|gender|address|issue date.
+  if(a.length>=7){
+    return {cccd:a[0],cmnd:a[1],name:a[2],dob:normDate(a[3]),gender:a[4],address:a[5],issue:normDate(a[6])};
+  }
+  throw new Error('Không nhận diện được cấu trúc QR. Hãy kiểm tra định dạng QR hoặc dán nội dung văn bản có nhãn trường.');
+}
+function fill(data){
+  fields.forEach(f=>$(f).value=data[f]||'');
+  // User-specified DTLA workflow: prefill MST and BHXH from citizen ID; verify per employee.
+  $('mst').value=data.cccd||'';
+  $('bhxh').value=data.cccd||'';
+}
+function readCurrent(){let o={};fields.forEach(f=>o[f]=clean($(f).value));return o;}
+function clearForm(){fields.forEach(f=>$(f).value='');}
+function showStatus(t){$('status').textContent=t;}
+$('parseBtn').onclick=()=>{try{fill(parseQR($('raw').value));showStatus('Đã đọc dữ liệu. Vui lòng kiểm tra từng trường trước khi xác nhận.')}catch(e){showStatus(e.message)}};
+$('startBtn').onclick=async()=>{
+  if(!window.Html5Qrcode){showStatus('Không tải được thư viện quét QR. Kiểm tra kết nối Internet hoặc liên hệ IT.');return;}
+  try{
+    scanner=new Html5Qrcode('reader');
+    const cameras=await Html5Qrcode.getCameras();
+    if(!cameras.length)throw new Error('Không tìm thấy camera.');
+    const cam=cameras.find(c=>/back|rear|environment/i.test(c.label))||cameras[cameras.length-1];
+    await scanner.start(cam.id,{fps:10,qrbox:{width:240,height:240}},decoded=>{
+      try{fill(parseQR(decoded));$('raw').value=decoded;showStatus('Quét thành công. Kiểm tra thông tin rồi xác nhận.');stopScanner();}
+      catch(e){showStatus(e.message);}
+    },()=>{});
+    showStatus('Camera đang hoạt động. Đưa QR vào khung quét.');
+  }catch(e){showStatus('Không mở được camera: '+e.message+'. Kiểm tra HTTPS và quyền camera.');}
+};
+async function stopScanner(){if(scanner){try{if(scanner.isScanning)await scanner.stop();scanner.clear();}catch(e){}scanner=null;}}
+$('stopBtn').onclick=stopScanner;
+$('addBtn').onclick=()=>{
+  const r=readCurrent();
+  if(!r.cccd||!r.name){alert('Cần có ít nhất Số CCCD và Họ tên.');return;}
+  if(records.some(x=>x.cccd===r.cccd)){alert('Số CCCD đã có trong danh sách.');return;}
+  records.push(r);render();clearForm();$('raw').value='';showStatus('Đã thêm hồ sơ vào danh sách tạm trên thiết bị.');
+};
+function render(){
+  $('count').textContent=records.length+' hồ sơ';
+  $('rows').innerHTML=records.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.name)}</td><td>${esc(r.cccd)}</td><td>${esc(r.dob)}</td><td><button class="secondary" onclick="removeRow(${i})">Xóa</button></td></tr>`).join('');
+}
+function esc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+window.removeRow=i=>{records.splice(i,1);render();};
+const headers=['Số CCCD','Số CMND cũ','Họ và tên','Giới tính','Ngày sinh','Nơi thường trú','Ngày cấp CCCD','Mã số thuế','Số BHXH'];
+const keys=['cccd','cmnd','name','gender','dob','address','issue','mst','bhxh'];
+function exportRows(){return [headers,...records.map(r=>keys.map(k=>r[k]||''))];}
+$('exportBtn').onclick=()=>{
+  if(!records.length){alert('Chưa có hồ sơ để xuất.');return;}
+  if(!window.XLSX){alert('Không tải được thư viện Excel.');return;}
+  const wb=XLSX.utils.book_new(),ws=XLSX.utils.aoa_to_sheet(exportRows());
+  ws['!cols']=[{wch:18},{wch:16},{wch:28},{wch:12},{wch:14},{wch:45},{wch:16},{wch:18},{wch:18}];
+  XLSX.utils.book_append_sheet(wb,ws,'HoSo_CCCD');
+  XLSX.writeFile(wb,'CCCD_SMART_SCAN.xlsx');
+};
+$('csvBtn').onclick=()=>{
+  if(!records.length){alert('Chưa có hồ sơ để xuất.');return;}
+  const csv=exportRows().map(row=>row.map(v=>'"'+String(v??'').replace(/"/g,'""')+'"').join(',')).join('\r\n');
+  const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='CCCD_SMART_SCAN.csv';a.click();URL.revokeObjectURL(a.href);
+};
+$('deleteAllBtn').onclick=()=>{if(confirm('Xóa toàn bộ danh sách hồ sơ tạm trên thiết bị?')){records=[];render();}};
+</script>
+</body>
+</html>
